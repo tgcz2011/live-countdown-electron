@@ -13,7 +13,6 @@ let config = {
   clickThrough: true
 };
 
-// Base64 图标 (16x16 PNG)
 const TRAY_ICON_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAAAZklEQVQ4y2NgQAX8DIwMDAz/Q/8M/AwMDAwMDw38DAwMDA8N/AwMDAwMDw38DAwMDA8N/AwMDAwMDw38DAwMDA8N/AwMDAwMDw38DAwMDA8N/AwMDAwMDw38DAwMDA8N/AwMDAwMDw38BAGFgAAB45N59AAAAAElFTkSuQmCC';
 
 function getConfigPath() {
@@ -42,77 +41,73 @@ function saveConfig() {
   }
 }
 
-// 使用 PowerShell 调用 Windows API 将窗口置于桌面图标下方
 function setAsDesktopWallpaper(win) {
   if (process.platform !== 'win32') return;
 
   const hwnd = win.getNativeWindowHandle();
-  if (!hwnd) return;
+  if (!hwnd || hwnd.length === 0) return;
 
-  const hwndValue = hwnd.readUInt32LE(0);
-  if (!hwndValue) return;
+  const hwndValue = Number(hwnd.readUInt32LE(0));
+  if (!hwndValue || hwndValue === 0) return;
 
-  // PowerShell 脚本：将窗口嵌入到 WorkerW（桌面图标窗口）
+  const hwndHex = '0x' + hwndValue.toString(16);
+
   const psScript = `
-    Add-Type @"
-      using System;
-      using System.Runtime.InteropServices;
-      public class WinAPI {
-        [DllImport("user32.dll", SetLastError = true)]
-        public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
-        [DllImport("user32.dll", SetLastError = true)]
-        public static extern IntPtr FindWindowEx(IntPtr hwndParent, IntPtr hwndChildAfter, string lpszClass, string lpszWindow);
-        [DllImport("user32.dll", SetLastError = true)]
-        public static extern IntPtr SetParent(IntPtr hWndChild, IntPtr hWndNewParent);
-        [DllImport("user32.dll", SetLastError = true)]
-        public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
-      }
+Add-Type @"
+  using System;
+  using System.Runtime.InteropServices;
+  public class WinAPI {
+    [DllImport("user32.dll")]
+    public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+    [DllImport("user32.dll")]
+    public static extern IntPtr FindWindowEx(IntPtr hwndParent, IntPtr hwndChildAfter, string lpszClass, string lpszWindow);
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetParent(IntPtr hWndChild, IntPtr hWndNewParent);
+    [DllImport("user32.dll")]
+    public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+    [DllImport("user32.dll")]
+    public static extern int SendMessageTimeout(IntPtr hWnd, int Msg, int wParam, int lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
+  }
 "@
 
-    $progman = [WinAPI]::FindWindow("Progman", $null)
-    if ($progman -eq [IntPtr]::Zero) { exit 1 }
+$targetHwnd = ${hwndHex}
 
-    # 发送 0x052C 消息让 Progman 创建 WorkerW
-    [WinAPI]::SendMessageTimeout($progman, 0x052C, 0, 0, 0, 1000, [ref]0) | Out-Null
+$progman = [WinAPI]::FindWindow("Progman", $null)
+if ($progman -eq [IntPtr]::Zero) { Write-Host "Error: Progman not found"; exit 1 }
 
-    Start-Sleep -Milliseconds 100
+[WinAPI]::SendMessageTimeout($progman, 0x052C, 0, 0, 0, 1000, [ref][IntPtr]::Zero) | Out-Null
+Start-Sleep -Milliseconds 200
 
-    # 查找 WorkerW 窗口
-    $workerw = [WinAPI]::FindWindowEx($progman, [IntPtr]::Zero, "WorkerW", $null)
-    if ($workerw -eq [IntPtr]::Zero) {
-      # 备用：查找 SHELLDLL_DefView 的父窗口
-      $shellView = [WinAPI]::FindWindowEx([IntPtr]::Zero, [IntPtr]::Zero, "SHELLDLL_DefView", $null)
-      if ($shellView -ne [IntPtr]::Zero) {
-        $workerw = [WinAPI]::FindWindowEx([IntPtr]::Zero, $shellView, "WorkerW", $null)
-      }
-    }
+$workerw = [WinAPI]::FindWindowEx($progman, [IntPtr]::Zero, "WorkerW", $null)
+if ($workerw -eq [IntPtr]::Zero) {
+  $shellView = [WinAPI]::FindWindowEx([IntPtr]::Zero, [IntPtr]::Zero, "SHELLDLL_DefView", $null)
+  if ($shellView -ne [IntPtr]::Zero) {
+    $workerw = [WinAPI]::FindWindowEx([IntPtr]::Zero, $shellView, "WorkerW", $null)
+  }
+}
 
-    if ($workerw -ne [IntPtr]::Zero) {
-      # 将窗口设置为 WorkerW 的子窗口
-      [WinAPI]::SetParent($hwndValue, $workerw) | Out-Null
+if ($workerw -eq [IntPtr]::Zero) {
+  Write-Host "Error: WorkerW not found"
+  $workerw = $progman
+}
 
-      # 确保窗口覆盖整个屏幕
-      $HWND_BOTTOM = 1
-      $SWP_NOMOVE = 0x0002
-      $SWP_NOSIZE = 0x0001
-      $SWP_NOZORDER = 0x0004
-      $SWP_FRAMECHANGED = 0x0020
+Write-Host "Setting parent: target=${hwndHex}, workerw=$(($workerw).ToString('X8'))"
+[WinAPI]::SetParent($targetHwnd, $workerw) | Out-Null
 
-      [WinAPI]::SetWindowPos($hwndValue, $HWND_BOTTOM, 0, 0, 0, 0,
-        $SWP_NOMOVE -bor $SWP_NOSIZE -bor $SWP_NOZORDER -bor $SWP_FRAMECHANGED) | Out-Null
-      Write-Host "Success: Window set behind desktop icons"
-    } else {
-      Write-Host "Error: WorkerW not found"
-      exit 1
-    }
-  `;
+$HWND_BOTTOM = [IntPtr]::new(1)
+[WinAPI]::SetWindowPos($targetHwnd, $HWND_BOTTOM, 0, 0, 0, 0,
+  0x0002 -bor 0x0001 -bor 0x0004 -bor 0x0020) | Out-Null
 
-  exec(`powershell -ExecutionPolicy Bypass -Command "${psScript.replace(/"/g, '\\"')}"`, (error, stdout, stderr) => {
+Write-Host "Success"
+`;
+
+  const escapedScript = psScript.replace(/"/g, '\\"').replace(/\n/g, '; ');
+  exec(`powershell -ExecutionPolicy Bypass -Command "${escapedScript}"`, { timeout: 5000 }, (error, stdout, stderr) => {
     if (error) {
-      console.error('Failed to set desktop wallpaper:', error.message);
-    } else {
-      console.log('Desktop wallpaper setup:', stdout.trim() || stderr);
+      console.error('PowerShell error:', error.message);
+      return;
     }
+    console.log('PowerShell:', stdout.trim(), stderr.trim());
   });
 }
 
@@ -123,8 +118,6 @@ function createWindow() {
   displays.forEach((display, index) => {
     const { width, height, x, y } = display.bounds;
 
-    console.log(`Creating window for display ${index}: ${width}x${height} at (${x},${y})`);
-
     const windowOptions = {
       width: width,
       height: height,
@@ -132,21 +125,15 @@ function createWindow() {
       y: y,
       transparent: true,
       frame: false,
-      skipTaskbar: true,
+      skipTaskbar: false,
       resizable: false,
       alwaysOnTop: false,
-      focusable: false,
-      type: 'desktop',
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
         webviewTag: true
       }
     };
-
-    if (config.transparent !== false) {
-      windowOptions.transparent = true;
-    }
 
     const win = new BrowserWindow(windowOptions);
     windows.push(win);
@@ -159,8 +146,7 @@ function createWindow() {
 
     win.loadFile('index.html');
 
-    // 窗口准备就绪后设置为桌面壁纸
-    win.once('ready-to-show', () => {
+    win.webContents.on('did-finish-load', () => {
       setAsDesktopWallpaper(win);
     });
 
