@@ -9,13 +9,11 @@ on:
 permissions:
   contents: write
   issues: write
+  pull-requests: write
 
 jobs:
   build:
     runs-on: windows-latest
-
-    env:
-      GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 
     steps:
       - name: Checkout code
@@ -30,6 +28,8 @@ jobs:
         run: npm install
 
       - name: Build Windows
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run dist
 
       - name: Upload artifacts
@@ -48,4 +48,4 @@ jobs:
           prerelease: false
           generate_release_notes: true
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
