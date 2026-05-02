@@ -41,27 +41,46 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         shell: pwsh
         run: |
-          $releaseResponse = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases" `
+          $headers = @{
+            "Authorization" = "token $env:GITHUB_TOKEN"
+            "Accept" = "application/vnd.github.v3+json"
+          }
+          $repo = "${{ github.repository }}"
+          $tag = "v$env:VERSION"
+
+          # 删除已存在的 release
+          try {
+            $existing = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/tags/$tag" -Headers $headers
+            Write-Host "Deleting existing release (ID: $($existing.id))..."
+            Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/$($existing.id)" -Method Delete -Headers $headers
+          } catch { Write-Host "No existing release" }
+
+          # 删除已存在的标签 ref
+          try {
+            Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/git/refs/tags/$tag" -Method Delete -Headers $headers
+          } catch { Write-Host "No existing tag ref" }
+
+          # 创建 release
+          $body = @{
+            tag_name = $tag
+            name = "Dynamic Wallpaper v$env:VERSION"
+            body = "动态桌面壁纸 - 版本 v$env:VERSION`n`n## 修复内容`n- 修复窗口遮挡桌面图标问题`n- 修复托盘图标缺失`n- 支持多显示器全屏覆盖`n- 使用 Windows API 正确嵌入桌面"
+            draft = $false
+            prerelease = $false
+          } | ConvertTo-Json
+
+          $releaseResponse = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases" `
             -Method Post `
-            -Headers @{
-              "Authorization" = "token $env:GITHUB_TOKEN"
-              "Accept" = "application/vnd.github.v3+json"
-            } `
-            -Body (@{
-              tag_name = "v$env:VERSION"
-              name = "Dynamic Wallpaper v$env:VERSION"
-              body = "动态桌面壁纸 - 版本 v$env:VERSION`n`n## 修复内容`n- 修复窗口遮挡桌面图标问题`n- 修复托盘图标缺失`n- 支持多显示器全屏覆盖`n- 使用 Windows API 正确嵌入桌面"
-              draft = $false
-              prerelease = $false
-            } | ConvertTo-Json)
+            -Headers $headers `
+            -Body $body
 
           $releaseId = $releaseResponse.id
-          Write-Host "Release created: v$env:VERSION (ID: $releaseId)"
+          Write-Host "Release created: $tag (ID: $releaseId)"
 
           $files = Get-ChildItem dist/*.exe
           foreach ($file in $files) {
             Write-Host "Uploading $($file.Name)..."
-            $uploadResponse = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases/$releaseId/assets?name=$($file.Name)" `
+            $uploadResponse = Invoke-RestMethod -Uri "https://uploads.github.com/repos/$repo/releases/$releaseId/assets?name=$($file.Name)" `
               -Method Post `
               -Headers @{
                 "Authorization" = "token $env:GITHUB_TOKEN"
@@ -74,4 +93,4 @@ jobs:
             Write-Host "Uploaded: $($uploadResponse.name) ($($uploadResponse.size) bytes)"
           }
 
-          Write-Host "Release v$env:VERSION completed!"
+          Write-Host "Release $tag completed!"
