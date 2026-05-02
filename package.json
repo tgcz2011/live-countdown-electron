@@ -12,7 +12,15 @@
   "license": "MIT",
   "devDependencies": {
     "electron": "^27.0.0",
-    "electron-builder": "^24.6.4"
+    "electron-builder": "^24.6.4",
+    "ffi-napi": "^4.0.3",
+    "ref-napi": "^3.0.3",
+    "ref-wchar-napi": "^1.0.0",
+    "ref-struct-napi": "^2.0.0"
+  },
+  "dependencies": {
+    "ffi-napi": "^4.0.3",
+    "ref-napi": "^3.0.3"
   },
   "build": {
     "appId": "com.operit.dynamicwallpaper",
