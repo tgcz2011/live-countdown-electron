@@ -1,6 +1,7 @@
 const { app, BrowserWindow, screen, globalShortcut, Tray, Menu, nativeImage, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { exec } = require('child_process');
 
 let mainWindow;
 let tray;
@@ -41,136 +42,83 @@ function saveConfig() {
   }
 }
 
-// Windows API 函数
-let user32, setWindowPos, setParent, findWindow, findWindowEx, sendMessageTimeout;
-
-function initWindowsAPI() {
-  if (process.platform !== 'win32') return false;
-
-  try {
-    const ffi = require('ffi-napi');
-    const ref = require('ref-napi');
-
-    user32 = ffi.DynamicLibrary('user32', 'stdcall');
-
-    // BOOL SetWindowPos(HWND hWnd, HWND hWndInsertAfter, int X, int Y, int cx, int cy, UINT uFlags);
-    setWindowPos = user32.dynamicFunc(
-      'SetWindowPos',
-      'bool',
-      ['int', 'int', 'int', 'int', 'int', 'int', 'uint32']
-    );
-
-    // HWND SetParent(HWND hWndChild, HWND hWndNewParent);
-    setParent = user32.dynamicFunc(
-      'SetParent',
-      'int',
-      ['int', 'int']
-    );
-
-    // HWND FindWindowA(LPCSTR lpClassName, LPCSTR lpWindowName);
-    findWindow = user32.dynamicFunc(
-      'FindWindowA',
-      'int',
-      ['string', 'string']
-    );
-
-    // HWND FindWindowExA(HWND hWndParent, HWND hWndChildAfter, LPCSTR lpszClass, LPCSTR lpszWindow);
-    findWindowEx = user32.dynamicFunc(
-      'FindWindowExA',
-      'int',
-      ['int', 'int', 'string', 'string']
-    );
-
-    // LRESULT SendMessageTimeoutA(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ...);
-    sendMessageTimeout = user32.dynamicFunc(
-      'SendMessageTimeoutA',
-      'int',
-      ['int', 'int', 'int', 'int', 'uint32', 'uint32', 'pointer']
-    );
-
-    return true;
-  } catch (error) {
-    console.error('Failed to init Windows API:', error.message);
-    return false;
-  }
-}
-
-// 将窗口设置为桌面壁纸（置于桌面图标下方）
+// 使用 PowerShell 调用 Windows API 将窗口置于桌面图标下方
 function setAsDesktopWallpaper(win) {
-  if (process.platform !== 'win32' || !user32) return;
+  if (process.platform !== 'win32') return;
 
-  try {
-    const hwnd = win.getNativeWindowHandle();
-    if (!hwnd) return;
+  const hwnd = win.getNativeWindowHandle();
+  if (!hwnd) return;
 
-    const hwndValue = hwnd.readUInt32LE(0);
-    if (!hwndValue) return;
+  const hwndValue = hwnd.readUInt32LE(0);
+  if (!hwndValue) return;
 
-    // 查找 Progman 窗口
-    const progman = findWindow('Progman', null);
-    if (!progman) {
-      console.error('Failed to find Progman window');
-      return;
+  // PowerShell 脚本：将窗口嵌入到 WorkerW（桌面图标窗口）
+  const psScript = `
+    Add-Type @"
+      using System;
+      using System.Runtime.InteropServices;
+      public class WinAPI {
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern IntPtr FindWindowEx(IntPtr hwndParent, IntPtr hwndChildAfter, string lpszClass, string lpszWindow);
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern IntPtr SetParent(IntPtr hWndChild, IntPtr hWndNewParent);
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+      }
+"@
+
+    $progman = [WinAPI]::FindWindow("Progman", $null)
+    if ($progman -eq [IntPtr]::Zero) { exit 1 }
+
+    # 发送 0x052C 消息让 Progman 创建 WorkerW
+    [WinAPI]::SendMessageTimeout($progman, 0x052C, 0, 0, 0, 1000, [ref]0) | Out-Null
+
+    Start-Sleep -Milliseconds 100
+
+    # 查找 WorkerW 窗口
+    $workerw = [WinAPI]::FindWindowEx($progman, [IntPtr]::Zero, "WorkerW", $null)
+    if ($workerw -eq [IntPtr]::Zero) {
+      # 备用：查找 SHELLDLL_DefView 的父窗口
+      $shellView = [WinAPI]::FindWindowEx([IntPtr]::Zero, [IntPtr]::Zero, "SHELLDLL_DefView", $null)
+      if ($shellView -ne [IntPtr]::Zero) {
+        $workerw = [WinAPI]::FindWindowEx([IntPtr]::Zero, $shellView, "WorkerW", $null)
+      }
     }
 
-    // 发送 0x052C 消息让 Progman 创建 WorkerW
-    const SMTO_NORMAL = 0x0000;
-    const result = sendMessageTimeout(
-      progman,
-      0x052C,
-      0,
-      0,
-      SMTO_NORMAL,
-      1000,
-      null
-    );
+    if ($workerw -ne [IntPtr]::Zero) {
+      # 将窗口设置为 WorkerW 的子窗口
+      [WinAPI]::SetParent($hwndValue, $workerw) | Out-Null
 
-    // 等待一小段时间让 WorkerW 创建
-    const { setTimeout } = require('timers');
-    setTimeout(() => {
-      // 查找 WorkerW 窗口（它是 Progman 的子窗口，包含桌面图标）
-      let workerw = findWindowEx(progman, 0, 'WorkerW', null);
-      if (!workerw) {
-        // 备用方案：查找 SHELLDLL_DefView 的父窗口
-        const shellView = findWindowEx(0, 0, 'SHELLDLL_DefView', null);
-        if (shellView) {
-          workerw = findWindowEx(0, shellView, 'WorkerW', null);
-        }
-      }
+      # 确保窗口覆盖整个屏幕
+      $HWND_BOTTOM = 1
+      $SWP_NOMOVE = 0x0002
+      $SWP_NOSIZE = 0x0001
+      $SWP_NOZORDER = 0x0004
+      $SWP_FRAMECHANGED = 0x0020
 
-      if (workerw) {
-        // 关键：将我们的窗口设置为 WorkerW 的子窗口
-        // 这样窗口就会在桌面图标下方
-        setParent(hwndValue, workerw);
-        console.log('Window set as desktop wallpaper (behind icons)');
+      [WinAPI]::SetWindowPos($hwndValue, $HWND_BOTTOM, 0, 0, 0, 0,
+        $SWP_NOMOVE -bor $SWP_NOSIZE -bor $SWP_NOZORDER -bor $SWP_FRAMECHANGED) | Out-Null
+      Write-Host "Success: Window set behind desktop icons"
+    } else {
+      Write-Host "Error: WorkerW not found"
+      exit 1
+    }
+  `;
 
-        // 确保窗口覆盖整个屏幕
-        const SWP_NOSIZE = 0x0001;
-        const SWP_NOMOVE = 0x0002;
-        const SWP_NOZORDER = 0x0004;
-        const SWP_FRAMECHANGED = 0x0020;
-        const HWND_BOTTOM = 1;
-
-        setWindowPos(hwndValue, HWND_BOTTOM, 0, 0, 0, 0,
-          SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-      } else {
-        console.error('Failed to find WorkerW window');
-      }
-    }, 100);
-
-  } catch (error) {
-    console.error('setAsDesktopWallpaper error:', error);
-  }
+  exec(`powershell -ExecutionPolicy Bypass -Command "${psScript.replace(/"/g, '\\"')}"`, (error, stdout, stderr) => {
+    if (error) {
+      console.error('Failed to set desktop wallpaper:', error.message);
+    } else {
+      console.log('Desktop wallpaper setup:', stdout.trim() || stderr);
+    }
+  });
 }
 
 function createWindow() {
   const displays = screen.getAllDisplays();
   const windows = [];
-
-  // 初始化 Windows API
-  if (process.platform === 'win32') {
-    initWindowsAPI();
-  }
 
   displays.forEach((display, index) => {
     const { width, height, x, y } = display.bounds;
@@ -186,10 +134,8 @@ function createWindow() {
       frame: false,
       skipTaskbar: true,
       resizable: false,
-      // 关键：不要设置 alwaysOnTop，让桌面 API 控制层级
       alwaysOnTop: false,
       focusable: false,
-      // 确保窗口在最底层
       type: 'desktop',
       webPreferences: {
         nodeIntegration: false,
@@ -205,23 +151,18 @@ function createWindow() {
     const win = new BrowserWindow(windowOptions);
     windows.push(win);
 
-    // 点击穿透
     if (config.clickThrough) {
       win.setIgnoreMouseEvents(true, { forward: true });
     }
 
-    // 显示在所有工作区
     win.setVisibleOnAllWorkspaces(true);
 
-    // 加载网页
     win.loadFile('index.html');
 
-    // 窗口创建后，设置为桌面壁纸（Windows 特定）
-    if (process.platform === 'win32') {
-      win.once('ready-to-show', () => {
-        setAsDesktopWallpaper(win);
-      });
-    }
+    // 窗口准备就绪后设置为桌面壁纸
+    win.once('ready-to-show', () => {
+      setAsDesktopWallpaper(win);
+    });
 
     win.on('closed', () => {
       const idx = windows.indexOf(win);
@@ -238,7 +179,6 @@ function createWindow() {
 
 function createTray() {
   try {
-    // 创建托盘图标（从 base64）
     const icon = nativeImage.createFromDataURL(
       'data:image/png;base64,' + TRAY_ICON_BASE64
     );
