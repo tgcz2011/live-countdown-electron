@@ -99,6 +99,7 @@
     </div>
 
     <script>
+        const { ipcRenderer } = require('electron');
         const webview = document.getElementById('wallpaper-webview');
         const loading = document.getElementById('loading');
         const errorDiv = document.getElementById('error');
@@ -151,6 +152,11 @@
         webview.addEventListener('crashed', (event) => {
           console.error('Webview crashed:', event);
           showError('浏览器窗口崩溃，请重启程序');
+        });
+
+        // 监听主进程的 URL 更新
+        ipcRenderer.on('update-url', (event, newUrl) => {
+          webview.src = newUrl;
         });
 
         // Prevent right-click menu

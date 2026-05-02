@@ -10,10 +10,12 @@
   },
   "author": "Operit",
   "license": "MIT",
-  "devDependencies": {
-    "electron": "^27.0.0",
-    "electron-builder": "^24.6.4"
-  },
+   "devDependencies": {
+     "electron": "^27.0.0",
+     "electron-builder": "^24.6.4",
+     "ffi-napi": "^4.0.3",
+     "ref-napi": "^3.0.3"
+   },
   "build": {
     "appId": "com.operit.dynamicwallpaper",
     "productName": "Dynamic Wallpaper",
