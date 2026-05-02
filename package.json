@@ -1,6 +1,6 @@
 {
   "name": "dynamic-wallpaper",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Dynamic wallpaper with browser window",
   "main": "main.js",
   "scripts": {
