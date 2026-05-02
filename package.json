@@ -1,6 +1,6 @@
 {
   "name": "dynamic-wallpaper",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Dynamic wallpaper with browser window",
   "main": "main.js",
   "scripts": {
@@ -10,12 +10,10 @@
   },
   "author": "Operit",
   "license": "MIT",
-   "devDependencies": {
-     "electron": "^27.0.0",
-     "electron-builder": "^24.6.4",
-     "ffi-napi": "^4.0.3",
-     "ref-napi": "^3.0.3"
-   },
+  "devDependencies": {
+    "electron": "^27.0.0",
+    "electron-builder": "^24.6.4"
+  },
   "build": {
     "appId": "com.operit.dynamicwallpaper",
     "productName": "Dynamic Wallpaper",
