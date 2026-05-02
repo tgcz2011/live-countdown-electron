@@ -57,7 +57,8 @@ function createWindow() {
       frame: false,
       skipTaskbar: true,
       resizable: false,
-      alwaysOnTop: false,  // 不在最顶层，避免遮挡桌面图标
+      alwaysOnTop: false,
+      focusable: false,
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
@@ -77,7 +78,8 @@ function createWindow() {
     }
 
     win.setVisibleOnAllWorkspaces(true);
-    win.setAlwaysOnTop(false, 'desktop');  // 关键：设置为桌面层级
+    // 设置为桌面层级（Windows: 置于桌面图标下方）
+    win.setAlwaysOnTop(false, 'desktop');
 
     win.loadFile('index.html');
 
@@ -86,66 +88,16 @@ function createWindow() {
       if (idx > -1) windows.splice(idx, 1);
     });
 
-    // 保存第一个窗口引用
     if (index === 0) {
       mainWindow = win;
     }
   });
 
-  // Windows 特定：将窗口置于桌面图标下方
-  if (process.platform === 'win32') {
-    setBehindDesktopIcons(windows);
-  }
-
   return windows;
-}
-
-// Windows API：将窗口置于桌面图标下方
-function setBehindDesktopIcons(windows) {
-  try {
-    const user32 = require('ffi-napi').DynamicLibrary('user32', 'stdcall');
-    constHWND = require('ref-napi').refType('int');
-
-    // 查找 WorkerW 窗口（桌面图标窗口）
-    const FindWindowA = user32.dynamicFunc('FindWindowA', 'int', ['string', 'string']);
-    const FindWindowExA = user32.dynamicFunc('FindWindowExA', 'int', ['int', 'int', 'string', 'string']);
-
-    const HWND_BOTTOM = 1;
-    const SWP_NOACTIVATE = 0x0010;
-    const SWP_NOMOVE = 0x0002;
-    const SWP_NOSIZE = 0x0001;
-    const SWP_NOZORDER = 0x0004;
-
-    // 查找 Progman 窗口
-    const progman = FindWindowA('Progman', null);
-
-    // 查找 WorkerW 窗口
-    let workerw = FindWindowExA(progman, 0, 'WorkerW', null);
-    if (!workerw) {
-      // 发送 0x052C 消息以创建 WorkerW
-      user32.dynamicFunc('SendMessageTimeoutA', 'int', ['int', 'int', 'int', 'string', 'int', 'int', 'pointer'])(
-        progman, 0x052C, 0, 0, 0, 100, null
-      );
-      workerw = FindWindowExA(progman, 0, 'WorkerW', null);
-    }
-
-    if (workerw) {
-      // 将我们的窗口设置为 WorkerW 的子窗口
-      windows.forEach(win => {
-        const hwnd = win.getNativeWindowHandle();
-        if (hwnd) {
-          user32.dynamicFunc('SetParent', 'int', ['int', 'int'])(hwnd.readUInt32LE(0), workerw);
-        }
-      });
-    }
-  } catch (error) {
-    console.log('Windows desktop integration not available:', error.message);
-  }
 }
 
 function createTray() {
   try {
-    // 创建托盘图标（从 base64）
     const icon = nativeImage.createFromDataURL(
       'data:image/png;base64,' + TRAY_ICON_BASE64
     );
@@ -157,15 +109,15 @@ function createTray() {
       {
         label: '显示/隐藏',
         click: () => {
-          if (mainWindow) {
-            if (mainWindow.isVisible()) {
-              mainWindow.hide();
+          BrowserWindow.getAllWindows().forEach(win => {
+            if (win.isVisible()) {
+              win.hide();
             } else {
-                mainWindow.show();
-                mainWindow.focus();
-              }
+              win.show();
+              win.focus();
             }
-          }
+          });
+        }
       },
       {
         label: '更换壁纸地址',
@@ -179,7 +131,6 @@ function createTray() {
           if (result && !result.canceled) {
             config.url = result.text;
             saveConfig();
-            // 更新所有窗口
             BrowserWindow.getAllWindows().forEach(win => {
               win.webContents.send('update-url', config.url);
             });
@@ -198,14 +149,14 @@ function createTray() {
     tray.setContextMenu(contextMenu);
 
     tray.on('click', () => {
-      if (mainWindow) {
-        if (mainWindow.isVisible()) {
-          mainWindow.hide();
+      BrowserWindow.getAllWindows().forEach(win => {
+        if (win.isVisible()) {
+          win.hide();
         } else {
-          mainWindow.show();
-          mainWindow.focus();
+          win.show();
+          win.focus();
         }
-      }
+      });
     });
   } catch (error) {
     console.error('Tray creation error:', error);
@@ -251,7 +202,6 @@ app.whenReady().then(() => {
   registerShortcuts();
   setupAutoStart();
 
-  // IPC handlers
   ipcMain.handle('get-config', () => {
     return config;
   });
