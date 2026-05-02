@@ -41,7 +41,7 @@ function saveConfig() {
 function createWindow() {
   const displays = screen.getAllDisplays();
   const primaryDisplay = displays[0];
-  const { width, height } = primaryDisplay.workAreaSize;
+  const { width, height } = primaryDisplay.size;
 
   const windowOptions = {
     width: width,
@@ -77,7 +77,7 @@ function createWindow() {
     mainWindow = null;
   });
 
-  // Window loses focus - hide (optional)
+  // 窗口失去焦点时隐藏（可选）
   mainWindow.on('blur', () => {
     if (config.clickThrough && mainWindow && !mainWindow.webContents.isDevToolsOpened()) {
       // mainWindow.hide();
